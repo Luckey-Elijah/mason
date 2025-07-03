@@ -20,6 +20,13 @@ part 'progress.dart';
 /// ```
 typedef LogStyle = String? Function(String? message);
 
+/// A typedef for a validation callback function that takes a value of type [T]
+/// and returns an optional error message as a [String].
+///
+/// The function should return `null` if the value is valid, or a [String]
+/// containing an error message if the value is invalid.
+typedef Validator<T> = String? Function(T value);
+
 String? _detailStyle(String? m) => darkGray.wrap(m);
 String? _infoStyle(String? m) => m;
 String? _errStyle(String? m) => lightRed.wrap(m);
@@ -27,6 +34,7 @@ String? _warnStyle(String? m) => yellow.wrap(styleBold.wrap(m));
 String? _alertStyle(String? m) =>
     backgroundRed.wrap(styleBold.wrap(white.wrap(m)));
 String? _successStyle(String? m) => lightGreen.wrap(m);
+String? _validationStyle(String? m) => yellow.wrap(styleBold.wrap(m));
 
 /// {@template log_theme}
 /// A theme object which contains styles for all log message types.
@@ -40,12 +48,14 @@ class LogTheme {
     LogStyle? warn,
     LogStyle? alert,
     LogStyle? success,
+    LogStyle? validation,
   })  : detail = detail ?? _detailStyle,
         info = info ?? _infoStyle,
         err = err ?? _errStyle,
         warn = warn ?? _warnStyle,
         alert = alert ?? _alertStyle,
-        success = success ?? _successStyle;
+        success = success ?? _successStyle,
+        validation = validation ?? _validationStyle;
 
   /// The [LogStyle] used by [detail].
   final LogStyle detail;
@@ -64,6 +74,9 @@ class LogTheme {
 
   /// The [LogStyle] used by [success].
   final LogStyle success;
+
+  /// The [LogStyle] used by [Validator] messages.
+  final LogStyle validation;
 }
 
 /// {@template logger}
@@ -182,22 +195,48 @@ class Logger {
   ///
   /// This method requires a terminal to be attached to stdout.
   /// See https://api.dart.dev/stable/dart-io/Stdout/hasTerminal.html.
-  String prompt(String? message, {Object? defaultValue, bool hidden = false}) {
+  String prompt(
+    String? message, {
+    Object? defaultValue,
+    bool hidden = false,
+    Validator<String>? validate,
+  }) {
     final hasDefault = defaultValue != null && '$defaultValue'.isNotEmpty;
     final resolvedDefaultValue = hasDefault ? '$defaultValue' : '';
     final suffix =
         hasDefault ? ' ${darkGray.wrap('($resolvedDefaultValue)')}' : '';
     final resolvedMessage = '$message$suffix ';
     _stdout.write(resolvedMessage);
-    final input = hidden ? _readLineHiddenSync() : _readLineSync();
-    final response =
-        input == null || input.isEmpty ? resolvedDefaultValue : input;
-    final lines = resolvedMessage.split('\n').length - 1;
-    final prefix =
-        lines > 1 ? '\x1b[A\u001B[2K\u001B[${lines}A' : '\x1b[A\u001B[2K';
-    _stdout.writeln(
-      '''$prefix$resolvedMessage${styleDim.wrap(lightCyan.wrap(hidden ? '******' : response))}''',
-    );
+    String response;
+    String? validation;
+    do {
+      final input = hidden ? _readLineHiddenSync() : _readLineSync();
+      response = input == null || input.isEmpty ? resolvedDefaultValue : input;
+      final lines = resolvedMessage.split('\n').length - 1;
+      validation = validate?.call(response);
+
+      if (validation != null && !(response == defaultValue)) {
+        const clearLine = '\u001b[2K\r';
+        for (var i = 0; i < lines; i++) {
+          _stdout.write(clearLine);
+        }
+
+        // add spacing between
+        validation = '${theme.validation(validation)} ';
+        response = '';
+      }
+
+      final prefix =
+          lines > 1 ? '\x1b[A\u001B[2K\u001B[${lines}A' : '\x1b[A\u001B[2K';
+
+      final displayMessage =
+          '''$prefix$resolvedMessage$validation${styleDim.wrap(lightCyan.wrap(hidden ? '******' : response))}''';
+
+      _stdout.write(displayMessage);
+
+      if (validation == null) _stdout.write('\n');
+    } while (validation != null);
+
     return response;
   }
 
